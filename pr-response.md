@@ -1,7 +1,11 @@
 # PR Response Doc — CineLog Watchlist Feature
 
 ## AI Usage
-<!-- Fill in at the end -->
+I used Claude (via Claude Code) for orientation, hygiene, and stress-testing — not to make the two design calls themselves.
+
+- **Orientation:** Before touching any of the six comments, I had it read `models.py`, `services/collection_service.py`, and `tests/test_collection.py` and summarize the naming convention (`verb_to_noun`), the dedup pattern (`AlreadyInCollectionError` + `filter_by(...).first()` check before insert), and the fixture structure (`app` → `sample_user`/`sample_film` → test). That's what let me write `add_to_watchlist`'s dedup check and `tests/test_watchlist.py` as a direct structural mirror instead of inventing a different pattern.
+- **Stress-testing Comments 4 and 5:** After drafting my initial responses, I asked: "act as a skeptical senior reviewer — what's the strongest counterargument or overlooked tradeoff in each of these two arguments?" (full drafts pasted in). For Comment 4, it pushed back that my "consistency with `CollectionEntry`" point was weak because `CollectionEntry` has no visibility field at all — there's no actual precedent to be consistent with — and that a watchlist arguably reveals more about aspiration/intent than a collection reveals about history, which cuts toward opt-in, not opt-out. I hadn't given that asymmetry enough weight, so I rewrote the reasoning to name that as a real weakness in my own argument rather than only stating the case for `public=True`. For Comment 5, it pointed out that reframing my justification as "consistency with `get_collection()`" glosses over the fact that a collection's `date_added` (when I watched something) and a watchlist's `date_added` (when I clicked a button) don't carry the same meaning, and that the staleness problem I flagged isn't a minor edge case — it undercuts the feature's core purpose. I revised the Comment 5 response to make that tension explicit instead of mentioning it as an aside. In both cases the final position (`public=True` default; date-added sort) didn't change, but the written reasoning is more honest about what it doesn't resolve.
+- **Commit hygiene:** Before finalizing, I checked my own `git log --oneline` output against the conventional commits spec (`type: description`, imperative mood, one logical change per commit) manually rather than asking an AI to do it, since the check is mechanical and I wanted to be sure I understood *why* each commit was scoped the way it was (e.g., why the UUID-relationship fix and the sort-order fix are separate commits from the original dedup/rename fixes).
 
 ## Comment 1 — Rename
 **What I did:** Renamed `save_to_watchlist()` to `add_to_watchlist()` in `services/watchlist_service.py` to match the `verb_to_noun` convention used elsewhere (e.g. `add_to_collection()`), and updated the single call site in `routes/watchlist/watchlist.py` (both the import and the function call).
@@ -49,5 +53,60 @@
 
 **How I verified no conflict remains:** `pytest tests/ -v` — all 12 tests pass (4 pre-existing collection tests + 8 watchlist tests). I also drove the actual Flask endpoints end-to-end with a throwaway script using `app.test_client()`: created a user and film with real UUID primary keys, then hit `POST /watchlist/<user_id>/add`, a duplicate add (409), `GET /watchlist/<user_id>`, `DELETE /watchlist/<user_id>/remove`, a second remove (404), and an add against a nonexistent UUID (404) — every response had the UUID string flowing through correctly with no type errors. Finally, `git log --oneline --merges main..feature/watchlist` returns empty, confirming the branch is a clean rebase with no merge commits.
 
+## Commit History
+
+`git log --oneline main..HEAD` on `feature/watchlist` after the interactive rebase — 13 commits, all conventional format, no merge commits:
+
+![git log --oneline showing 13 conventional commits](docs/git-log-screenshot.png)
+
 ## PR Description
-<!-- Written at the end -->
+
+**What this feature does:** Adds a watchlist feature to CineLog so users can save films they want to watch later, separate from their collection of already-watched films. Adds a `WatchlistEntry` model and three endpoints:
+- `GET /watchlist/<user_id>` — list a user's watchlist, sorted by date added (newest first)
+- `POST /watchlist/<user_id>/add` — add a film to the watchlist, with duplicate protection and an optional `public` flag (defaults to `True`)
+- `DELETE /watchlist/<user_id>/remove` — remove a film from the watchlist (stretch feature)
+
+**Design decisions:**
+1. **Default visibility (`public=True`):** New watchlist entries default to public, matching the app's existing fully-open posture (the sibling `CollectionEntry` feature has no visibility gating at all) and the fact that nothing in the codebase yet reads this flag for access control — there's no discovery feed or auth layer today, so the default costs nothing now. Callers can override it via the new `public` parameter on `add_to_watchlist()` / request body. Full reasoning and the tradeoffs I'm not solving here (retroactive exposure once a discovery feed ships) are in Comment 4 below.
+2. **Sort order (date added, newest first):** Changed from alphabetical-by-title to `date_added` descending, matching `get_collection()`'s existing convention. Full reasoning, including a pushback on the "most users want recency" justification and an acknowledged limitation (stale watchlist items sink to the bottom), is in Comment 5 below.
+
+**How to manually test:**
+```bash
+python -m venv .venv && source .venv/Scripts/activate   # or .venv\Scripts\activate.bat on Windows cmd
+pip install -r requirements.txt
+python app.py   # starts on http://127.0.0.1:5000
+```
+Then, in another terminal (replace `<user_id>` / `<film_id>` with real UUIDs from your seeded data, e.g. via `GET /films`):
+```bash
+# View a user's watchlist (empty at first)
+curl http://127.0.0.1:5000/watchlist/<user_id>
+
+# Add a film (defaults to public)
+curl -X POST http://127.0.0.1:5000/watchlist/<user_id>/add \
+  -H "Content-Type: application/json" \
+  -d '{"film_id": "<film_id>"}'
+
+# Add the same film again -> 409 AlreadyInWatchlistError
+curl -X POST http://127.0.0.1:5000/watchlist/<user_id>/add \
+  -H "Content-Type: application/json" \
+  -d '{"film_id": "<film_id>"}'
+
+# Add a film with explicit private visibility
+curl -X POST http://127.0.0.1:5000/watchlist/<user_id>/add \
+  -H "Content-Type: application/json" \
+  -d '{"film_id": "<other_film_id>", "public": false}'
+
+# View the watchlist again -> newest-added film first
+curl http://127.0.0.1:5000/watchlist/<user_id>
+
+# Remove a film -> 200, then remove again -> 404 NotInWatchlistError
+curl -X DELETE http://127.0.0.1:5000/watchlist/<user_id>/remove \
+  -H "Content-Type: application/json" \
+  -d '{"film_id": "<film_id>"}'
+
+# Add a nonexistent film_id -> 404 FilmNotFoundError
+curl -X POST http://127.0.0.1:5000/watchlist/<user_id>/add \
+  -H "Content-Type: application/json" \
+  -d '{"film_id": "00000000-0000-0000-0000-000000000000"}'
+```
+Or run the automated suite: `pytest tests/ -v` (12 tests covering both `collection` and `watchlist`).
