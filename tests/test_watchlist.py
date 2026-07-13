@@ -174,3 +174,24 @@ def test_get_watchlist_returns_newest_first(app, sample_user):
         # so it should come first under date-added ordering.
         assert titles[0] == "Blade Runner"
         assert titles[1] == "Alien"
+
+
+def test_get_watchlist_does_not_leak_other_users_entries(app, sample_film):
+    """
+    get_watchlist() should only return entries for the requested user, even
+    when another user has a watchlist entry for the same film. Not requested
+    by any review comment, but the multi-user filter_by(user_id=...) logic
+    is exactly the kind of thing that silently breaks during a refactor.
+    """
+    with app.app_context():
+        user_a = User(username="user_a", email="a@example.com")
+        user_b = User(username="user_b", email="b@example.com")
+        db.session.add_all([user_a, user_b])
+        db.session.commit()
+
+        add_to_watchlist(user_id=user_a.id, film_id=sample_film)
+        add_to_watchlist(user_id=user_b.id, film_id=sample_film)
+
+        watchlist_a = get_watchlist(user_a.id)
+        assert len(watchlist_a) == 1
+        assert watchlist_a[0]["id"] == sample_film
