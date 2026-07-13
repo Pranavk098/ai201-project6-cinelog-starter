@@ -38,9 +38,16 @@
 - **Visibility toggle:** `add_to_watchlist(user_id, film_id, public=True)` and `POST /watchlist/<user_id>/add` now accept an optional `"public"` field in the request body (defaults to `True` if omitted). This is the concrete fix for the "not just inheriting a default" concern in Comment 4 — callers can now set visibility explicitly instead of always getting the default. Covered by `test_add_to_watchlist_respects_explicit_public_false`.
 
 ## Comment 6 — Rebase
-**What conflicted:**
+**What conflicted:** Ran `git fetch origin && git rebase origin/main`. `main` had already merged `refactor: migrate film IDs from integer to UUID` (changing `Film.id` from `db.Integer` to `db.String(36)` with a UUID default) plus a later `.gitignore` commit. Two things happened during the rebase:
+1. A textual conflict on `.gitignore` (add/add — both my branch and `main` added one independently before I noticed `main` already had one).
+2. A silent, non-flagged conflict: git auto-applied the commit that originally added the `WatchlistEntry` model, but because `main`'s `models.py` had been substantially rewritten by the UUID refactor, the 3-way merge dropped the `WatchlistEntry` class entirely from the merged file — with no conflict markers and no error. Git only reported the `.gitignore` conflict; `git rebase` claimed full success after that. I only caught this because I ran the test suite immediately after and it failed.
+
 **How I resolved it:**
-**How I verified no conflict remains:**
+1. Merged `.gitignore` by hand — kept both `main`'s `.pytest_cache/` entry and my `.venv/`/`venv/` entries.
+2. After the rebase reported success, I ran `pytest tests/ -v` anyway (rather than trusting the "no conflicts" message) and got `ImportError: cannot import name 'WatchlistEntry' from 'models'`. I diffed `models.py` against `origin/feature/watchlist` (the pre-rebase tip, still available since I hadn't pushed yet) to confirm `WatchlistEntry` really was present before the rebase and missing after. I re-added the class to `models.py`, this time with `film_id = db.Column(db.String(36), db.ForeignKey("film.id"), nullable=False)` to match the new UUID-based `Film.id`, instead of the old `db.Integer`. I also updated the now-stale "integer — pre-refactor" docstrings and comments in `services/watchlist_service.py` and `routes/watchlist/watchlist.py` to reflect that film IDs are UUID strings, and updated the route body-shape docs (`"film_id": <int>` → `"film_id": "<uuid>"`).
+3. Committed this as its own commit (`fix: restore WatchlistEntry model with UUID film_id after rebase onto main`) rather than folding it into the earlier commits, since it's a distinct, identifiable fix tied specifically to the rebase.
+
+**How I verified no conflict remains:** `pytest tests/ -v` — all 12 tests pass (4 pre-existing collection tests + 8 watchlist tests). I also drove the actual Flask endpoints end-to-end with a throwaway script using `app.test_client()`: created a user and film with real UUID primary keys, then hit `POST /watchlist/<user_id>/add`, a duplicate add (409), `GET /watchlist/<user_id>`, `DELETE /watchlist/<user_id>/remove`, a second remove (404), and an add against a nonexistent UUID (404) — every response had the UUID string flowing through correctly with no type errors. Finally, `git log --oneline --merges main..feature/watchlist` returns empty, confirming the branch is a clean rebase with no merge commits.
 
 ## PR Description
 <!-- Written at the end -->
