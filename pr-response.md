@@ -57,7 +57,7 @@ That said, the stronger *documentation* argument (as opposed to the behavioral o
 
 ## Commit History
 
-`git log --oneline main..HEAD` on `feature/watchlist` after the interactive rebase — 13 commits, all conventional format, no merge commits:
+`git log --oneline main..HEAD` on `feature/watchlist` after the interactive rebase — all conventional format, no merge commits (a couple of later `docs:` commits, including this screenshot update itself, land after the screenshot was taken and so aren't pictured):
 
 ![git log --oneline showing 13 conventional commits](docs/git-log-screenshot.png)
 
